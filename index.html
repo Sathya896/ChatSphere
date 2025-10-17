@@ -1,96 +1,60 @@
-import asyncio
-import websockets
-import json
-import os
-from http.server import SimpleHTTPRequestHandler
-from socketserver import TCPServer
-import threading
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ChatSphere</title>
+<style>
+body { font-family: Arial; text-align: center; background: #f0f0f0; }
+#chat { width: 90%; max-width: 600px; margin: auto; border: 1px solid #ccc; padding: 10px; background: #fff; }
+#messages { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 5px; margin-bottom: 5px; }
+input { width: 80%; padding: 5px; }
+button { padding: 5px; }
+</style>
+</head>
+<body>
 
-# ----------------- WebSocket Chat -----------------
-customers = {}  # session_id -> websocket
-agents = set()  # set of agent websockets
+<h2>ChatSphere</h2>
 
-async def handler(websocket):
-    role = None
-    session_id = None
-    picked_customer = None
+<div id="chat">
+    <div id="messages"></div>
+    <input type="text" id="msg" placeholder="Type a message">
+    <button onclick="sendMsg()">Send</button>
+</div>
 
-    try:
-        async for message in websocket:
-            data = json.loads(message)
+<script>
+let ws = new WebSocket("wss://" + window.location.host);
+let role = prompt("Enter role: customer or agent");
+let pickedCustomer = null;
 
-            # --- New client connects ---
-            if "role" in data:
-                role = data["role"]
-                if role == "customer":
-                    session_id = f"customer_{id(websocket)}"
-                    customers[session_id] = websocket
-                    await websocket.send(json.dumps({"type": "session", "session_id": session_id}))
-                    print(f"✅ Customer connected: {session_id}")
-                    await notify_agents()
-                elif role == "agent":
-                    agents.add(websocket)
-                    print("🎧 Agent connected")
-                    await notify_agents()
+ws.onopen = () => {
+    ws.send(JSON.stringify({role}));
+};
 
-            # --- Agent picks customer ---
-            elif data.get("type") == "pick_customer" and role == "agent":
-                picked_customer = data["session_id"]
-                await websocket.send(json.dumps({"type": "info", "text": f"Connected with {picked_customer}"}))
-                print(f"Agent picked {picked_customer}")
+ws.onmessage = (event) => {
+    let data = JSON.parse(event.data);
 
-            # --- Messages ---
-            elif data.get("type") == "message":
-                text = data["text"]
-                sender = data.get("sender")
+    if (data.type === "session") {
+        console.log("Your session ID:", data.session_id);
+    }
 
-                if sender == "customer" and session_id:
-                    for agent in agents:
-                        try:
-                            await agent.send(json.dumps({"type": "message", "text": text, "from": session_id}))
-                        except:
-                            pass
-                elif sender == "agent" and picked_customer:
-                    target_ws = customers.get(picked_customer)
-                    if target_ws:
-                        await target_ws.send(json.dumps({"type": "message", "text": text, "from": "agent"}))
+    if (data.type === "customers" && role === "agent") {
+        pickedCustomer = data.list[0] || null;
+    }
 
-    except websockets.exceptions.ConnectionClosed:
-        print(f"🔌 Disconnected: {role or 'unknown'}")
+    if (data.type === "message") {
+        let messages = document.getElementById("messages");
+        messages.innerHTML += `<div><b>${data.from}:</b> ${data.text}</div>`;
+        messages.scrollTop = messages.scrollHeight;
+    }
+};
 
-    finally:
-        if role == "customer" and session_id in customers:
-            del customers[session_id]
-            await notify_agents()
-        elif role == "agent" and websocket in agents:
-            agents.remove(websocket)
+function sendMsg() {
+    let input = document.getElementById("msg");
+    if (!input.value) return;
+    ws.send(JSON.stringify({type:"message", text: input.value, sender: role}));
+    input.value = "";
+}
+</script>
 
-async def notify_agents():
-    data = json.dumps({"type": "customers", "list": list(customers.keys())})
-    for agent in agents:
-        try:
-            await agent.send(data)
-        except:
-            pass
-
-# ----------------- HTTP Server -----------------
-def run_http_server():
-    port = 8080  # HTTP port
-    handler = SimpleHTTPRequestHandler
-    with TCPServer(("", port), handler) as httpd:
-        print(f"🌐 HTTP server running at http://0.0.0.0:{port}")
-        httpd.serve_forever()
-
-# ----------------- Deployment -----------------
-PORT = int(os.environ.get("PORT", 10000))
-
-async def main():
-    # Start HTTP server in a separate thread
-    threading.Thread(target=run_http_server, daemon=True).start()
-    # Start WebSocket server
-    async with websockets.serve(handler, "0.0.0.0", PORT):
-        print(f"🚀 WebSocket server running at ws://0.0.0.0:{PORT}")
-        await asyncio.Future()  # run forever
-
-if __name__ == "__main__":
-    asyncio.run(main())
+</body>
+</html>
