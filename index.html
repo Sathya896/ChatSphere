@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Care Chat</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", sans-serif;
+      background: linear-gradient(135deg, #74ABE2, #5563DE);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    #chat-container {
+      width: 400px;
+      height: 600px;
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    header {
+      background: #5563DE;
+      color: white;
+      text-align: center;
+      padding: 15px;
+      font-weight: bold;
+      font-size: 20px;
+    }
+
+    #messages {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .message {
+      max-width: 70%;
+      margin-bottom: 12px;
+      padding: 10px 15px;
+      border-radius: 20px;
+      position: relative;
+      word-wrap: break-word;
+    }
+
+    .customer {
+      background: #5563DE;
+      color: white;
+      align-self: flex-end;
+      border-bottom-right-radius: 0;
+    }
+
+    .agent {
+      background: #E5E5EA;
+      color: black;
+      align-self: flex-start;
+      border-bottom-left-radius: 0;
+    }
+
+    .timestamp {
+      font-size: 10px;
+      color: #999;
+      margin-top: 2px;
+      text-align: right;
+    }
+
+    footer {
+      display: flex;
+      border-top: 1px solid #ddd;
+      padding: 10px;
+      background: #f9f9f9;
+    }
+
+    #input {
+      flex: 1;
+      border: none;
+      outline: none;
+      padding: 10px;
+      font-size: 14px;
+      border-radius: 10px;
+      background: #eee;
+    }
+
+    #sendBtn {
+      background: #5563DE;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 20px;
+      margin-left: 10px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    #sendBtn:hover {
+      background: #6b77f2;
+    }
+
+    #roleSelection {
+      text-align: center;
+      padding: 40px;
+    }
+
+    #roleSelection button {
+      background: #5563DE;
+      color: white;
+      border: none;
+      border-radius: 20px;
+      padding: 15px 30px;
+      font-size: 16px;
+      margin: 10px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    #roleSelection button:hover {
+      background: #6b77f2;
+    }
+
+    #customerList {
+      border-bottom: 1px solid #ccc;
+      background: #f0f0f0;
+      padding: 5px;
+      display: none;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    #customerList button {
+      margin: 3px;
+      padding: 5px 10px;
+      border: none;
+      background: #5563DE;
+      color: white;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    #customerList button.active {
+      background: #6b77f2;
+    }
+  </style>
+</head>
+<body>
+
+<div id="chat-container">
+  <header>💬 Customer Care</header>
+
+  <div id="roleSelection">
+    <p>Select your role:</p>
+    <button id="customerBtn">Customer</button>
+    <button id="agentBtn">Agent</button>
+  </div>
+
+  <div id="chat" style="display:none; flex-direction: column; height: 100%;">
+    <div id="customerList"></div>
+    <div id="messages"></div>
+    <footer>
+      <input id="input" type="text" placeholder="Type a message..." />
+      <button id="sendBtn">Send</button>
+    </footer>
+  </div>
+</div>
+
+<script>
+let ws;
+let role = "";
+let sessionId = "";
+let activeCustomer = "";
+
+const messages = document.getElementById("messages");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("sendBtn");
+const customerListDiv = document.getElementById("customerList");
+
+function addMessage(sender, text) {
+  const msgDiv = document.createElement("div");
+  msgDiv.classList.add("message", sender);
+  msgDiv.innerHTML = text + `<div class="timestamp">${new Date().toLocaleTimeString()}</div>`;
+  messages.appendChild(msgDiv);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function updateCustomerList(list) {
+  customerListDiv.innerHTML = "";
+  list.forEach((c) => {
+    const btn = document.createElement("button");
+    btn.textContent = c;
+    if (c === activeCustomer) btn.classList.add("active");
+    btn.onclick = () => {
+      activeCustomer = c;
+      ws.send(JSON.stringify({ type: "pick_customer", session_id: c }));
+      Array.from(customerListDiv.children).forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      messages.innerHTML = "";
+    };
+    customerListDiv.appendChild(btn);
+  });
+}
+
+function sendMessage() {
+  const text = input.value.trim();
+  if (!text) return;
+
+  if (role === "customer") {
+    ws.send(JSON.stringify({ type: "message", session_id: sessionId, text, sender: "customer" }));
+    addMessage("customer", text);
+  } else if (role === "agent" && activeCustomer) {
+    ws.send(JSON.stringify({ type: "message", session_id: activeCustomer, text, sender: "agent" }));
+    addMessage("agent", text);
+  }
+  input.value = "";
+}
+
+function getWsUrl() {
+  if (window.location.hostname === "localhost") {
+    return "ws://localhost:10000";
+  }
+  return "wss://" + window.location.host;
+}
+
+document.getElementById("customerBtn").onclick = () => {
+  role = "customer";
+  document.getElementById("roleSelection").style.display = "none";
+  document.getElementById("chat").style.display = "flex";
+  ws = new WebSocket(getWsUrl());
+
+  ws.onopen = () => ws.send(JSON.stringify({ role: "customer" }));
+
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === "session") {
+      sessionId = data.session_id;
+    } else if (data.type === "message") {
+      addMessage("agent", data.text);
+    }
+  };
+};
+
+document.getElementById("agentBtn").onclick = () => {
+  role = "agent";
+  document.getElementById("roleSelection").style.display = "none";
+  document.getElementById("chat").style.display = "flex";
+  customerListDiv.style.display = "flex";
+  ws = new WebSocket(getWsUrl());
+
+  ws.onopen = () => ws.send(JSON.stringify({ role: "agent" }));
+
+  ws.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    if (data.type === "customers") {
+      updateCustomerList(data.list);
+    } else if (data.type === "message") {
+      addMessage("customer", data.text);
+    } else if (data.type === "info") {
+      addMessage("agent", `ℹ️ ${data.text}`);
+    }
+  };
+};
+
+sendBtn.onclick = sendMessage;
+input.addEventListener("keypress", (e) => {
+  if (e.key === "Enter") sendMessage();
+});
+</script>
+
+</body>
+</html>
+
+
