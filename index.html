@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ChatSphere</title>
+<style>
+body { font-family: Arial; text-align: center; background: #f0f0f0; }
+#chat { width: 90%; max-width: 600px; margin: auto; border: 1px solid #ccc; padding: 10px; background: #fff; }
+#messages { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 5px; margin-bottom: 5px; }
+input { width: 80%; padding: 5px; }
+button { padding: 5px; }
+</style>
+</head>
+<body>
+
+<h2>ChatSphere</h2>
+
+<div id="chat">
+    <div id="messages"></div>
+    <input type="text" id="msg" placeholder="Type a message">
+    <button onclick="sendMsg()">Send</button>
+</div>
+
+<script>
+let ws = new WebSocket("wss://" + window.location.host);
+let role = prompt("Enter role: customer or agent");
+let pickedCustomer = null;
+
+ws.onopen = () => {
+    ws.send(JSON.stringify({role}));
+};
+
+ws.onmessage = (event) => {
+    let data = JSON.parse(event.data);
+
+    if (data.type === "session") {
+        console.log("Your session ID:", data.session_id);
+    }
+
+    if (data.type === "customers" && role === "agent") {
+        pickedCustomer = data.list[0] || null;
+    }
+
+    if (data.type === "message") {
+        let messages = document.getElementById("messages");
+        messages.innerHTML += `<div><b>${data.from}:</b> ${data.text}</div>`;
+        messages.scrollTop = messages.scrollHeight;
+    }
+};
+
+function sendMsg() {
+    let input = document.getElementById("msg");
+    if (!input.value) return;
+    ws.send(JSON.stringify({type:"message", text: input.value, sender: role}));
+    input.value = "";
+}
+</script>
+
+</body>
+</html>
+
+
+
