@@ -1,279 +1,96 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Customer Care Chat</title>
-  <style>
-    body {
-      margin: 0;
-      font-family: "Segoe UI", sans-serif;
-      background: linear-gradient(135deg, #74ABE2, #5563DE);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
+import asyncio
+import websockets
+import json
+import os
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
+import threading
 
-    #chat-container {
-      width: 400px;
-      height: 600px;
-      background: white;
-      border-radius: 20px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+# ----------------- WebSocket Chat -----------------
+customers = {}  # session_id -> websocket
+agents = set()  # set of agent websockets
 
-    header {
-      background: #5563DE;
-      color: white;
-      text-align: center;
-      padding: 15px;
-      font-weight: bold;
-      font-size: 20px;
-    }
+async def handler(websocket):
+    role = None
+    session_id = None
+    picked_customer = None
 
-    #messages {
-      flex: 1;
-      padding: 15px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-    }
+    try:
+        async for message in websocket:
+            data = json.loads(message)
 
-    .message {
-      max-width: 70%;
-      margin-bottom: 12px;
-      padding: 10px 15px;
-      border-radius: 20px;
-      position: relative;
-      word-wrap: break-word;
-    }
+            # --- New client connects ---
+            if "role" in data:
+                role = data["role"]
+                if role == "customer":
+                    session_id = f"customer_{id(websocket)}"
+                    customers[session_id] = websocket
+                    await websocket.send(json.dumps({"type": "session", "session_id": session_id}))
+                    print(f"✅ Customer connected: {session_id}")
+                    await notify_agents()
+                elif role == "agent":
+                    agents.add(websocket)
+                    print("🎧 Agent connected")
+                    await notify_agents()
 
-    .customer {
-      background: #5563DE;
-      color: white;
-      align-self: flex-end;
-      border-bottom-right-radius: 0;
-    }
+            # --- Agent picks customer ---
+            elif data.get("type") == "pick_customer" and role == "agent":
+                picked_customer = data["session_id"]
+                await websocket.send(json.dumps({"type": "info", "text": f"Connected with {picked_customer}"}))
+                print(f"Agent picked {picked_customer}")
 
-    .agent {
-      background: #E5E5EA;
-      color: black;
-      align-self: flex-start;
-      border-bottom-left-radius: 0;
-    }
+            # --- Messages ---
+            elif data.get("type") == "message":
+                text = data["text"]
+                sender = data.get("sender")
 
-    .timestamp {
-      font-size: 10px;
-      color: #999;
-      margin-top: 2px;
-      text-align: right;
-    }
+                if sender == "customer" and session_id:
+                    for agent in agents:
+                        try:
+                            await agent.send(json.dumps({"type": "message", "text": text, "from": session_id}))
+                        except:
+                            pass
+                elif sender == "agent" and picked_customer:
+                    target_ws = customers.get(picked_customer)
+                    if target_ws:
+                        await target_ws.send(json.dumps({"type": "message", "text": text, "from": "agent"}))
 
-    footer {
-      display: flex;
-      border-top: 1px solid #ddd;
-      padding: 10px;
-      background: #f9f9f9;
-    }
+    except websockets.exceptions.ConnectionClosed:
+        print(f"🔌 Disconnected: {role or 'unknown'}")
 
-    #input {
-      flex: 1;
-      border: none;
-      outline: none;
-      padding: 10px;
-      font-size: 14px;
-      border-radius: 10px;
-      background: #eee;
-    }
+    finally:
+        if role == "customer" and session_id in customers:
+            del customers[session_id]
+            await notify_agents()
+        elif role == "agent" and websocket in agents:
+            agents.remove(websocket)
 
-    #sendBtn {
-      background: #5563DE;
-      color: white;
-      border: none;
-      border-radius: 10px;
-      padding: 10px 20px;
-      margin-left: 10px;
-      cursor: pointer;
-      transition: 0.2s;
-    }
+async def notify_agents():
+    data = json.dumps({"type": "customers", "list": list(customers.keys())})
+    for agent in agents:
+        try:
+            await agent.send(data)
+        except:
+            pass
 
-    #sendBtn:hover {
-      background: #6b77f2;
-    }
+# ----------------- HTTP Server -----------------
+def run_http_server():
+    port = 8080  # HTTP port
+    handler = SimpleHTTPRequestHandler
+    with TCPServer(("", port), handler) as httpd:
+        print(f"🌐 HTTP server running at http://0.0.0.0:{port}")
+        httpd.serve_forever()
 
-    #roleSelection {
-      text-align: center;
-      padding: 40px;
-    }
+# ----------------- Deployment -----------------
+PORT = int(os.environ.get("PORT", 10000))
 
-    #roleSelection button {
-      background: #5563DE;
-      color: white;
-      border: none;
-      border-radius: 20px;
-      padding: 15px 30px;
-      font-size: 16px;
-      margin: 10px;
-      cursor: pointer;
-      transition: 0.2s;
-    }
+async def main():
+    # Start HTTP server in a separate thread
+    threading.Thread(target=run_http_server, daemon=True).start()
+    # Start WebSocket server
+    async with websockets.serve(handler, "0.0.0.0", PORT):
+        print(f"🚀 WebSocket server running at ws://0.0.0.0:{PORT}")
+        await asyncio.Future()  # run forever
 
-    #roleSelection button:hover {
-      background: #6b77f2;
-    }
-
-    #customerList {
-      border-bottom: 1px solid #ccc;
-      background: #f0f0f0;
-      padding: 5px;
-      display: none;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-
-    #customerList button {
-      margin: 3px;
-      padding: 5px 10px;
-      border: none;
-      background: #5563DE;
-      color: white;
-      border-radius: 8px;
-      cursor: pointer;
-    }
-
-    #customerList button.active {
-      background: #6b77f2;
-    }
-  </style>
-</head>
-<body>
-
-<div id="chat-container">
-  <header>💬 Customer Care</header>
-
-  <div id="roleSelection">
-    <p>Select your role:</p>
-    <button id="customerBtn">Customer</button>
-    <button id="agentBtn">Agent</button>
-  </div>
-
-  <div id="chat" style="display:none; flex-direction: column; height: 100%;">
-    <div id="customerList"></div>
-    <div id="messages"></div>
-    <footer>
-      <input id="input" type="text" placeholder="Type a message..." />
-      <button id="sendBtn">Send</button>
-    </footer>
-  </div>
-</div>
-
-<script>
-let ws;
-let role = "";
-let sessionId = "";
-let activeCustomer = "";
-
-const messages = document.getElementById("messages");
-const input = document.getElementById("input");
-const sendBtn = document.getElementById("sendBtn");
-const customerListDiv = document.getElementById("customerList");
-
-function addMessage(sender, text) {
-  const msgDiv = document.createElement("div");
-  msgDiv.classList.add("message", sender);
-  msgDiv.innerHTML = text + `<div class="timestamp">${new Date().toLocaleTimeString()}</div>`;
-  messages.appendChild(msgDiv);
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function updateCustomerList(list) {
-  customerListDiv.innerHTML = "";
-  list.forEach((c) => {
-    const btn = document.createElement("button");
-    btn.textContent = c;
-    if (c === activeCustomer) btn.classList.add("active");
-    btn.onclick = () => {
-      activeCustomer = c;
-      ws.send(JSON.stringify({ type: "pick_customer", session_id: c }));
-      Array.from(customerListDiv.children).forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      messages.innerHTML = "";
-    };
-    customerListDiv.appendChild(btn);
-  });
-}
-
-function sendMessage() {
-  const text = input.value.trim();
-  if (!text) return;
-
-  if (role === "customer") {
-    ws.send(JSON.stringify({ type: "message", session_id: sessionId, text, sender: "customer" }));
-    addMessage("customer", text);
-  } else if (role === "agent" && activeCustomer) {
-    ws.send(JSON.stringify({ type: "message", session_id: activeCustomer, text, sender: "agent" }));
-    addMessage("agent", text);
-  }
-  input.value = "";
-}
-
-function getWsUrl() {
-  if (window.location.hostname === "localhost") {
-    return "ws://localhost:10000";
-  }
-  return "wss://" + window.location.host;
-}
-
-document.getElementById("customerBtn").onclick = () => {
-  role = "customer";
-  document.getElementById("roleSelection").style.display = "none";
-  document.getElementById("chat").style.display = "flex";
-  ws = new WebSocket(getWsUrl());
-
-  ws.onopen = () => ws.send(JSON.stringify({ role: "customer" }));
-
-  ws.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    if (data.type === "session") {
-      sessionId = data.session_id;
-    } else if (data.type === "message") {
-      addMessage("agent", data.text);
-    }
-  };
-};
-
-document.getElementById("agentBtn").onclick = () => {
-  role = "agent";
-  document.getElementById("roleSelection").style.display = "none";
-  document.getElementById("chat").style.display = "flex";
-  customerListDiv.style.display = "flex";
-  ws = new WebSocket(getWsUrl());
-
-  ws.onopen = () => ws.send(JSON.stringify({ role: "agent" }));
-
-  ws.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    if (data.type === "customers") {
-      updateCustomerList(data.list);
-    } else if (data.type === "message") {
-      addMessage("customer", data.text);
-    } else if (data.type === "info") {
-      addMessage("agent", `ℹ️ ${data.text}`);
-    }
-  };
-};
-
-sendBtn.onclick = sendMessage;
-input.addEventListener("keypress", (e) => {
-  if (e.key === "Enter") sendMessage();
-});
-</script>
-
-</body>
-</html>
-
-
+if __name__ == "__main__":
+    asyncio.run(main())
